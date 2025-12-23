@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 
 # --- 1. SETUP & CONFIGURATION ---
 load_dotenv()
+# Using GPT-5.2 Pro for superior vision reasoning
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+MODEL_NAME = "gpt-5.2" 
 
 RES_W, RES_H = 1920, 1080
 DISP_W, DISP_H = 1280, 720
@@ -20,28 +22,38 @@ SCALE_Y = RES_H / DISP_H
 INTERFACE_FILE = "custom_interface.png"
 
 def analyze_interface(image_path, target_width, target_height):
-    """Sends drawing to GPT-4o for coordinate analysis."""
+    """Sends drawing to GPT-5.2 for high-precision coordinate analysis."""
     with open(image_path, "rb") as image_file:
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
 
     prompt = f"""
-    Analyze this interface drawing. Return a JSON object with coordinates scaled 
-    to a width of {target_width} and height of {target_height}.
-    1. 'sliders': Vertical paths. Return {{x, y, w, h}}.
-    2. 'buttons': Box shapes. Return {{x, y, w, h}}.
-    3. 'knobs': Circle shapes. Return {{x, y, r}}.
-    Format: {{ "sliders": [], "buttons": [], "knobs": [] }}
+    Analyze this interface drawing with high precision. 
+    Return a JSON object with coordinates scaled to {target_width}x{target_height}.
+    
+    1. 'sliders': Vertical tracking lines. Return {{x, y, w, h}}.
+    2. 'buttons': Interactive box shapes. Return {{x, y, w, h}}.
+    3. 'knobs': Circular controls. Return {{x, y, r}}.
+    
+    Format your response as a valid JSON object:
+    {{ "sliders": [], "buttons": [], "knobs": [] }}
     """
+    
+    # Utilizing GPT-5.2's improved JSON mode and vision capabilities
     response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}]}],
+        model=MODEL_NAME,
+        messages=[{
+            "role": "user", 
+            "content": [
+                {"type": "text", "text": prompt}, 
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+            ]
+        }],
         response_format={ "type": "json_object" }
     )
     return json.loads(response.choices[0].message.content)
 
 # --- 2. ADVANCED SKETCHPAD ---
 def run_sketchpad(existing_file=None):
-    """Pygame sketchpad with Undo, Eraser, and Clear features."""
     pygame.init()
     screen = pygame.display.set_mode((DISP_W, DISP_H))
     pygame.display.set_caption("Sketchpad - Advanced Edit Mode")
@@ -119,7 +131,6 @@ def run_sketchpad(existing_file=None):
 
 # --- 3. INTERACTIVE MEDIAPIPE APP ---
 def start_mediapipe_app(interface_file):
-    """Main hand-tracking loop with pinch-to-edit and value display."""
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, RES_W)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RES_H)
@@ -136,18 +147,10 @@ def start_mediapipe_app(interface_file):
 
     edit_btn_rect = (RES_W - 220, 20, 200, 80)
     
-    # Robust MediaPipe hands initialization
     mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=1,
-        min_detection_confidence=0.8,
-        min_tracking_confidence=0.5
-    )
+    hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.8, min_tracking_confidence=0.5)
     
     active_slider_id, active_knob_id = None, None
-
-    
 
     while cap.isOpened():
         success, frame = cap.read()
@@ -159,8 +162,8 @@ def start_mediapipe_app(interface_file):
 
         if results.multi_hand_landmarks:
             for hand_lms in results.multi_hand_landmarks:
-                t = hand_lms.landmark[mp_hands.HandLandmark.THUMB_TIP] # Point 4
-                idx = hand_lms.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] # Point 8
+                t = hand_lms.landmark[mp_hands.HandLandmark.THUMB_TIP] 
+                idx = hand_lms.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
                 px, py = int(idx.x * RES_W), int(idx.y * RES_H)
                 pinched = math.sqrt((idx.x - t.x)**2 + (idx.y - t.y)**2) < 0.05
 
@@ -194,13 +197,11 @@ def start_mediapipe_app(interface_file):
 
         final_view = cv2.resize(display, (DISP_W, DISP_H))
         
-        # EDIT button
         ev_x, ev_y = int(edit_btn_rect[0]/SCALE_X), int(edit_btn_rect[1]/SCALE_Y)
         ev_w, ev_h = int(edit_btn_rect[2]/SCALE_X), int(edit_btn_rect[3]/SCALE_Y)
         cv2.rectangle(final_view, (ev_x, ev_y), (ev_x+ev_w, ev_y+ev_h), (180, 40, 40), -1)
         cv2.putText(final_view, "EDIT", (ev_x+55, ev_y+50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 3)
 
-        # Parameter value rendering
         for b in buttons:
             b['cd'] = max(0, b['cd'] - 1)
             bx, by = int(b['rect'][0] / SCALE_X), int(b['rect'][1] / SCALE_Y)
@@ -218,8 +219,7 @@ def start_mediapipe_app(interface_file):
             k['cd'] = max(0, k['cd'] - 1)
             kx, ky = int(k['center'][0] / SCALE_X), int(k['center'][1] / SCALE_Y)
             kr, rad = int(k['radius'] / SCALE_X), math.radians(k['angle'])
-            color = (0, 255, 0) if k['active'] else (255, 255, 0)
-            cv2.circle(final_view, (kx, ky), kr, color, 2)
+            cv2.circle(final_view, (kx, ky), kr, (0, 255, 0) if k['active'] else (255, 255, 0), 2)
             cv2.line(final_view, (kx, ky), (int(kx + kr*math.cos(rad)), int(ky + kr*math.sin(rad))), (0, 255, 255), 3)
             norm_angle = (k['angle'] + 180) % 360
             cv2.putText(final_view, f"{int((norm_angle / 360) * 100)}", (kx - 10, ky + kr + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
@@ -236,7 +236,6 @@ if __name__ == "__main__":
     if choice == "1":
         files = [f for f in os.listdir() if f.endswith(".png")]
         if not files:
-            print("No presets found. Opening sketchpad...")
             current_file = run_sketchpad()
         else:
             for i, f in enumerate(files): print(f"{i+1}. {f}")
