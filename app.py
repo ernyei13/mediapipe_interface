@@ -9,11 +9,29 @@ import pygame
 import time
 from openai import OpenAI
 from dotenv import load_dotenv
+import mido
+import time
 
 # --- 1. SETUP & CONFIGURATION ---
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL_NAME = "gpt-5.2" 
+
+
+# --- MIDI SETUP ---
+# Create a virtual output port
+midiout = mido.open_output('HandInterfacePort', virtual=True)
+
+def send_midi_cc(control, value):
+    """Sends a CC message (value 0-127)"""
+    msg = mido.Message('control_change', control=control, value=int(value))
+    midiout.send(msg)
+
+def send_midi_note(note, state):
+    """Sends Note On/Off for buttons"""
+    msg = mido.Message('note_on' if state else 'note_off', note=note, velocity=127)
+    midiout.send(msg)
+
 
 RES_W, RES_H = 1920, 1080
 DISP_W, DISP_H = 1280, 720
@@ -22,14 +40,16 @@ SCALE_Y = RES_H / DISP_H
 INTERFACE_FILE = "custom_interface.png"
 
 def analyze_interface(image_path, target_width, target_height):
+    """Sends drawing to GPT-5.2 for high-precision coordinate analysis."""
     with open(image_path, "rb") as image_file:
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
 
+    # Updated prompt to detect 'X' for momentary buttons
     prompt = f"""
     Analyze this interface drawing with high precision. 
     Return a JSON object with coordinates scaled to {target_width}x{target_height}.
     1. 'sliders': Vertical tracking lines. Return {{x, y, w, h}}.
-    2. 'buttons': Interactive box shapes. Return {{x, y, w, h}}.
+    2. 'buttons': Box shapes. If a box has an 'X' inside, mark it as 'momentary'. Return {{x, y, w, h, type}}.
     3. 'knobs': Circular controls. Return {{x, y, r}}.
     Format your response as a valid JSON object:
     {{ "sliders": [], "buttons": [], "knobs": [] }}
@@ -73,7 +93,6 @@ def run_sketchpad(existing_file=None):
     saving_preset = False
     preset_name = ""
     
-    # SELECTION LOGIC - Hardened Initialization
     selection_start = None
     selection_rect = pygame.Rect(0, 0, 0, 0) 
     clipboard_surf = None
@@ -84,7 +103,6 @@ def run_sketchpad(existing_file=None):
         keys = pygame.key.get_pressed()
         ctrl_cmd = keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL] or keys[pygame.K_LMETA] or keys[pygame.K_RMETA]
 
-        # Buttons
         btn_try = pygame.Rect(DISP_W - 140, DISP_H - 50, 120, 40)
         btn_undo = pygame.Rect(10, DISP_H - 50, 70, 40)
         btn_clear = pygame.Rect(90, DISP_H - 50, 70, 40)
@@ -98,7 +116,6 @@ def run_sketchpad(existing_file=None):
         for event in pygame.event.get():
             if event.type == pygame.QUIT: pygame.quit(); exit()
             
-            # --- KEYBOARD SHORTCUTS ---
             if event.type == pygame.KEYDOWN and not saving_preset:
                 if ctrl_cmd:
                     if event.key == pygame.K_z:
@@ -131,7 +148,6 @@ def run_sketchpad(existing_file=None):
                         item_rect = pygame.Rect(290, DISP_H - 95 - (i * 30), 100, 30)
                         if item_rect.collidepoint(event.pos):
                             os.remove(os.path.join(PRESETS_DIR, file)); preset_files = get_presets(); break
-
                 if event.button == 1:
                     if dropdown_open:
                         item_clicked = False
@@ -143,15 +159,12 @@ def run_sketchpad(existing_file=None):
                                 canvas.blit(pygame.transform.scale(img, (RES_W, RES_H)), (0, 0))
                                 dropdown_open = False; item_clicked = True; break
                         if not item_clicked and not btn_presets.collidepoint(event.pos): dropdown_open = False
-
-                    if btn_try.collidepoint(event.pos):
-                        pygame.image.save(canvas, INTERFACE_FILE); running = False 
+                    if btn_try.collidepoint(event.pos): pygame.image.save(canvas, INTERFACE_FILE); running = False 
                     elif btn_presets.collidepoint(event.pos): dropdown_open = not dropdown_open
                     elif btn_save_pre.collidepoint(event.pos): saving_preset = True
                     elif btn_undo.collidepoint(event.pos):
                         if len(undo_stack) > 1: undo_stack.pop(); canvas = undo_stack[-1].copy() 
-                    elif btn_clear.collidepoint(event.pos):
-                        undo_stack.append(canvas.copy()); canvas.fill((255, 255, 255))
+                    elif btn_clear.collidepoint(event.pos): undo_stack.append(canvas.copy()); canvas.fill((255, 255, 255))
                     elif btn_pen.collidepoint(event.pos): mode = "PEN"
                     elif btn_erase.collidepoint(event.pos): mode = "ERASER"
                     elif btn_select.collidepoint(event.pos): mode = "SELECT"
@@ -171,15 +184,13 @@ def run_sketchpad(existing_file=None):
                 drawing = False
                 if mode == "SELECT" and is_selecting:
                     is_selecting = False
-                    # VALIDATION: Only copy if rect exists and has area
                     if selection_rect is not None:
                         final_rect = selection_rect.normalize()
                         if final_rect.width > 5 and final_rect.height > 5:
                             try:
                                 clipboard_surf = canvas.subsurface(final_rect).copy()
                                 mode = "PASTE"
-                            except Exception as e:
-                                print(f"Copy Error: {e}")
+                            except: pass
                 selection_start = None
 
             if event.type == pygame.MOUSEMOTION:
@@ -187,12 +198,10 @@ def run_sketchpad(existing_file=None):
                     cx, cy = canvas_pos; sx, sy = selection_start
                     selection_rect = pygame.Rect(min(sx, cx), min(sy, cy), abs(cx - sx), abs(cy - sy))
                 elif drawing:
-                    color = (0, 0, 0) if mode == "PEN" else (255, 255, 255)
-                    thick = 8 if mode == "PEN" else 60
+                    color, thick = ((0, 0, 0), 8) if mode == "PEN" else ((255, 255, 255), 60)
                     if last_pos: pygame.draw.line(canvas, color, last_pos, canvas_pos, thick)
                     last_pos = canvas_pos
 
-        # Rendering
         display_canvas = pygame.transform.smoothscale(canvas, (DISP_W, DISP_H))
         screen.blit(display_canvas, (0, 0))
         if is_selecting and selection_rect:
@@ -204,7 +213,6 @@ def run_sketchpad(existing_file=None):
                 ghost = pygame.transform.smoothscale(clipboard_surf, (int(clipboard_surf.get_width()/SCALE_X), int(clipboard_surf.get_height()/SCALE_Y)))
                 ghost.set_alpha(150); screen.blit(ghost, (mx, my))
 
-        # UI Rendering
         pygame.draw.rect(screen, (40, 40, 180), btn_try); screen.blit(font.render("TRY", True, (255,255,255)), (btn_try.x+45, btn_try.y+11))
         pygame.draw.rect(screen, (80, 80, 80), btn_undo); screen.blit(font.render("UNDO", True, (255,255,255)), (btn_undo.x+10, btn_undo.y+11))
         pygame.draw.rect(screen, (150, 50, 50), btn_clear); screen.blit(font.render("CLR", True, (255,255,255)), (btn_clear.x+15, btn_clear.y+11))
@@ -229,7 +237,6 @@ def run_sketchpad(existing_file=None):
         pygame.display.flip()
     pygame.quit(); return INTERFACE_FILE
 
-# --- 3. MEDIAPIPE APP (Value Display & Edit Logic) ---
 def start_mediapipe_app(interface_file):
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, RES_W); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RES_H)
@@ -237,16 +244,17 @@ def start_mediapipe_app(interface_file):
     if raw_ui is None: return "QUIT"
     raw_ui = cv2.resize(raw_ui, (RES_W, RES_H))
     ui_data = analyze_interface(interface_file, RES_W, RES_H)
+
     sliders = [{'rect': (s['x'], s['y'], s['w'], s['h']), 'val': 0.5, 'id': i} for i, s in enumerate(ui_data.get('sliders', []))]
-    buttons = [{'rect': (b['x'], b['y'], b['w'], b['h']), 'on': False, 'cd': 0} for b in ui_data.get('buttons', [])]
-    knobs = [{'center': (k['x'], k['y']), 'radius': k.get('r', 30), 'angle': 0, 'active': False, 'cd': 0, 'id': i} for i, k in enumerate(ui_data.get('knobs', []))]
+    buttons = [{'rect': (b['x'], b['y'], b['w'], b['h']), 'on': False, 'cd': 0, 'id': i, 'momentary': b.get('type') == 'momentary'} for i, b in enumerate(ui_data.get('buttons', []))]
+    knobs = [{'center': (k['x'], k['y']), 'radius': k.get('r', 30), 'angle': 0, 'id': i} for i, k in enumerate(ui_data.get('knobs', []))]
+    
     edit_btn_rect = (RES_W - 220, 20, 200, 80)
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(min_detection_confidence=0.8, min_tracking_confidence=0.5)
-    active_slider_id, active_knob_id = None, None
     
-
-    
+    active_slider_id = None
+    active_knob_id = None
 
     while cap.isOpened():
         success, frame = cap.read()
@@ -254,15 +262,21 @@ def start_mediapipe_app(interface_file):
         frame = cv2.flip(frame, 1); frame = cv2.resize(frame, (RES_W, RES_H))
         results = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         display = cv2.addWeighted(frame, 0.7, raw_ui, 0.3, 0)
+
+        for b in buttons: 
+            if b['momentary']: b['on'] = False
+
         if results.multi_hand_landmarks:
             for hand_lms in results.multi_hand_landmarks:
                 t, idx = hand_lms.landmark[4], hand_lms.landmark[8]
                 px, py = int(idx.x * RES_W), int(idx.y * RES_H)
                 pinched = math.sqrt((idx.x - t.x)**2 + (idx.y - t.y)**2) < 0.05
+                
                 if pinched:
                     ex, ey, ew, eh = edit_btn_rect
                     if ex < px < ex + ew and ey < py < ey + eh:
                         cap.release(); cv2.destroyAllWindows(); return "EDIT"
+                    
                     if active_slider_id is None:
                         for s in sliders:
                             if s['rect'][0]-60 < px < s['rect'][0]+s['rect'][2]+60 and s['rect'][1] < py < s['rect'][1]+s['rect'][3]:
@@ -270,44 +284,87 @@ def start_mediapipe_app(interface_file):
                     if active_slider_id is not None:
                         s = next(item for item in sliders if item["id"] == active_slider_id)
                         s['val'] = 1.0 - np.clip((py - s['rect'][1]) / s['rect'][3], 0.0, 1.0)
+                        send_midi_cc(control=s['id'], value=s['val'] * 127)
+                    
+                    if active_knob_id is None:
+                        for k in knobs:
+                            dist = math.sqrt((px - k['center'][0])**2 + (py - k['center'][1])**2)
+                            if dist < k['radius'] + 50:
+                                active_knob_id = k['id']; break
+                    
+                        # 2. Knob MIDI
+                    if active_knob_id is not None:
+                        k = next(item for item in knobs if item["id"] == active_knob_id)
+                        k['angle'] = math.degrees(math.atan2(py - k['center'][1], px - k['center'][0]))
+                        # Map angle (0-360) to MIDI (0-127)
+                        midi_val = int(((k['angle'] % 360) / 360) * 127)
+                        send_midi_cc(control=k['id'] + 20, value=midi_val) # Offset by 20 to avoid slider IDs
+                    
+                    # 3. Button MIDI
                     for b in buttons:
-                        if b['rect'][0] < px < b['rect'][0]+b['rect'][2] and b['rect'][1] < py < b['rect'][1]+b['rect'][3] and b['cd'] == 0:
-                            b['on'] = not b['on']; b['cd'] = 25
-                    for k in knobs:
-                        if math.sqrt((px - k['center'][0])**2 + (py - k['center'][1])**2) < k['radius'] + 50 and k['cd'] == 0:
-                            if active_knob_id == k['id']: active_knob_id = None; k['active'] = False
-                            elif active_knob_id is None: active_knob_id = k['id']; k['active'] = True
-                            k['cd'] = 30
-                else: active_slider_id = None
-                if active_knob_id is not None:
-                    knob = next(item for item in knobs if item["id"] == active_knob_id)
-                    knob['angle'] = math.degrees(math.atan2(py - knob['center'][1], px - knob['center'][0]))
+                        bx, by, bw, bh = b['rect']
+                        if bx < px < bx + bw and by < py < by + bh:
+                            if b['momentary'] and not b['on']:
+                                b['on'] = True
+                                send_midi_note(note=60 + b['id'], state=True)
+                            elif not b['momentary'] and b['cd'] == 0:
+                                b['on'] = not b['on']
+                                send_midi_note(note=60 + b['id'], state=b['on'])
+                                b['cd'] = 25
+                else:
+                    active_slider_id = None
+                    active_knob_id = None
 
         final_v = cv2.resize(display, (DISP_W, DISP_H))
-        ev_x, ev_y = int(edit_btn_rect[0]/SCALE_X), int(edit_btn_rect[1]/SCALE_Y)
-        cv2.rectangle(final_v, (ev_x, ev_y), (ev_x+int(edit_btn_rect[2]/SCALE_X), ev_y+int(edit_btn_rect[3]/SCALE_Y)), (180, 40, 40), -1)
-        cv2.putText(final_v, "EDIT", (ev_x+55, ev_y+50), 1, 2, (255, 255, 255), 3)
-
+        
+        # --- RENDERING ---
+        # --- RENDERING ---
+        # Draw "Back to Edit" Button
+        ex, ey, ew, eh = [int(v / SCALE_X if i%2==0 else v / SCALE_Y) for i, v in enumerate(edit_btn_rect)]
+        cv2.rectangle(final_v, (ex, ey), (ex + ew, ey + eh), (50, 50, 50), -1) # Dark gray background
+        cv2.rectangle(final_v, (ex, ey), (ex + ew, ey + eh), (255, 255, 255), 2) # White border
+        cv2.putText(final_v, "EDIT UI", (ex + 40, ey + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        # Buttons
         for b in buttons:
             b['cd'] = max(0, b['cd'] - 1)
             bx, by = int(b['rect'][0] / SCALE_X), int(b['rect'][1] / SCALE_Y)
-            cv2.rectangle(final_v, (bx, by), (bx+int(b['rect'][2]/SCALE_X), by+int(b['rect'][3]/SCALE_Y)), (0, 255, 0) if b['on'] else (0, 0, 255), 2)
-            cv2.putText(final_v, f"{1 if b['on'] else 0}", (bx + 15, by + int(b['rect'][3]/SCALE_Y) + 20), 1, 1, (255, 255, 255), 1)
+            bw, bh = int(b['rect'][2] / SCALE_X), int(b['rect'][3] / SCALE_Y)
+            if b['on']:
+                overlay = final_v.copy()
+                cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), (0, 255, 0), -1)
+                final_v = cv2.addWeighted(overlay, 0.4, final_v, 0.6, 0)
+                cv2.rectangle(final_v, (bx, by), (bx+bw, by+bh), (0, 255, 0), 2)
+            else:
+                cv2.rectangle(final_v, (bx, by), (bx+bw, by+bh), (0, 0, 255), 2)
+
+        # Sliders
         for s in sliders:
-            sx, sy = int((s['rect'][0] + s['rect'][2]//2) / SCALE_X), int((s['rect'][1] + (1.0 - s['val']) * s['rect'][3]) / SCALE_Y)
-            cv2.circle(final_v, (sx, sy), 15, (0, 255, 255), -1)
-            cv2.putText(final_v, f"{int(s['val'] * 100)}", (int(s['rect'][0]/SCALE_X), int((s['rect'][1]+s['rect'][3])/SCALE_Y)+20), 1, 1, (0, 255, 255), 1)
+            rx, ry, rw, rh = [int(val / (SCALE_X if i%2==0 else SCALE_Y)) for i, val in enumerate(s['rect'])]
+            current_y = ry + int((1.0 - s['val']) * rh)
+            cv2.line(final_v, (rx + rw//2, ry + rh), (rx + rw//2, current_y), (0, 255, 255), 4)
+            cv2.circle(final_v, (rx + rw//2, current_y), 15, (0, 255, 255), -1)
+
+        # Knobs (Updated with Transparent Fill)
         for k in knobs:
-            k['cd'] = max(0, k['cd'] - 1)
             kx, ky, kr = int(k['center'][0]/SCALE_X), int(k['center'][1]/SCALE_Y), int(k['radius']/SCALE_X)
+            is_active = (active_knob_id == k['id'])
+            color = (0, 255, 0) if is_active else (255, 255, 0)
+            
+            # Draw transparent fill
+            overlay = final_v.copy()
+            cv2.ellipse(overlay, (kx, ky), (kr, kr), 0, 0, k['angle'] % 360, color, -1)
+            final_v = cv2.addWeighted(overlay, 0.4, final_v, 0.6, 0)
+            
+            # Draw border and state pointer on top
+            cv2.circle(final_v, (kx, ky), kr, (255, 255, 255), 2)
             rad = math.radians(k['angle'])
-            cv2.circle(final_v, (kx, ky), kr, (0, 255, 0) if k['active'] else (255, 255, 0), 2)
-            cv2.line(final_v, (kx, ky), (int(kx + kr*math.cos(rad)), int(ky + kr*math.sin(rad))), (0, 255, 255), 3)
-            norm_angle = (k['angle'] + 180) % 360
-            cv2.putText(final_v, f"{int((norm_angle/360)*100)}", (kx-10, ky+kr+20), 1, 1, (255, 255, 0), 1)
+            px_end = int(kx + kr * math.cos(rad))
+            py_end = int(ky + kr * math.sin(rad))
+            cv2.line(final_v, (kx, ky), (px_end, py_end), (0, 0, 0), 3)
 
         cv2.imshow('Hand Interface', final_v)
         if cv2.waitKey(1) & 0xFF == 27: break
+        
     cap.release(); cv2.destroyAllWindows(); return "QUIT"
 
 # --- 4. MAIN FLOW ---
