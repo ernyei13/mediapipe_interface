@@ -4,7 +4,7 @@
 
 ## Demo Video
 
-[![Watch the demo video]](https://youtu.be/XrNSpenP5vQ?si=ufUAakjEDVi6hAG1)
+[Watch the demo video](https://youtu.be/XrNSpenP5vQ?si=ufUAakjEDVi6hAG1)
 
 ## Setup
 
