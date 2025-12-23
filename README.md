@@ -4,12 +4,7 @@
 
 ## Demo Video
 
-Check out this video to see the project in action:
-
-
-<video src="mediapipe_interface/mediapipe_midi.mov" controls="controls" style="max-width: 100%;">
-</video>
-
+[![Watch the video](https://img.youtube.com/vi/YOUR_VIDEO_ID/0.jpg)](https://youtu.be/XrNSpenP5vQ?si=ufUAakjEDVi6hAG1)
 
 ## Setup
 
