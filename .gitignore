@@ -4,5 +4,7 @@ env/
 bin/
 lib/
 
+pipe_venv/
+
 .env
 env
