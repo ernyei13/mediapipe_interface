@@ -70,7 +70,7 @@ def analyze_interface(image_path, target_width, target_height):
     3. 'buttons': Box shapes. If it has an 'X', mark as 'momentary'. Return {{x, y, w, h, type}}.
     4. 'knobs': Circular controls. Return {{x, y, r}}.
     
-    IMPORTANT: Provide the most TIGHT bounding boxes possible for accuracy.
+    IMPORTANT: Provide the most TIGHT bounding boxes possible for accuracy. IT SHOULD BE PIXEL PERFECT TO THE CONTROL ELEMENTS SO IT OVERLAYS NICELY ON THE IMAGE.
     Format as JSON: {{ "anchors": [], "sliders": [], "buttons": [], "knobs": [] }}
     """
     response = client.chat.completions.create(
